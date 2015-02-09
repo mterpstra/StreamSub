@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+
 	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"net/http"
 )
 
 type addConnMessage struct {
@@ -50,7 +51,7 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case newmsg := <-ch:
-			println("I need to send this down the socket:", string(newmsg))
+			println("Device:", device, "session:", session, "message from channel and for redis", string(newmsg))
 			conn.WriteMessage(1, newmsg)
 		}
 	}
@@ -75,17 +76,35 @@ func redisMonitor() {
 	}
 }
 
+type ConnectionsListType map[string]map[string]chan []byte
+
+func printConnections(conns ConnectionsListType) {
+	println("------------------------------------------------------------------------")
+	for session, deviceList := range conns {
+		for device, _ := range deviceList {
+			println(session, device)
+		}
+	}
+	println("------------------------------------------------------------------------")
+}
+
 func manager() {
 
-	var connections map[string]map[string]chan []byte
+	var connections ConnectionsListType
 	connections = make(map[string]map[string]chan []byte)
 
 	for {
 		select {
 		case newconn := <-addConnChannel:
-			println("manager: AddConnRequest:", newconn.device, newconn.session, newconn.channel)
-			connections[newconn.session] = make(map[string]chan []byte)
+			printConnections(connections)
+			println("AddConnRequest:", newconn.session, newconn.device, newconn.channel)
+
+			if _, ok := connections[newconn.session]; !ok {
+				connections[newconn.session] = make(map[string]chan []byte)
+			}
+
 			connections[newconn.session][newconn.device] = newconn.channel
+			printConnections(connections)
 
 		case oldconn := <-delConnChannel:
 			println("manager: DelConnRequest:", oldconn.device, oldconn.session)
