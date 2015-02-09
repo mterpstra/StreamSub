@@ -17,7 +17,6 @@ type addConnMessage struct {
 type delConnMessage struct {
 	device  string
 	session string
-	channel chan (string)
 }
 
 var (
@@ -34,7 +33,6 @@ var upgrader = websocket.Upgrader{
 var redisConnection redis.Conn
 
 func handleSubscription(w http.ResponseWriter, r *http.Request) {
-	println("handleSubscription")
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -57,6 +55,8 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// TODO: Decide how to know when the connection is closed....
+	// Do I really need a new goroutine for this to read on continually?
 }
 
 func redisMonitor() {
@@ -89,16 +89,17 @@ func manager() {
 
 		case oldconn := <-delConnChannel:
 			println("manager: DelConnRequest:", oldconn.device, oldconn.session)
+			delete(connections[oldconn.session], oldconn.device)
+			if len(connections[oldconn.session]) < 1 {
+				delete(connections, oldconn.session)
+			}
 
 		case redismsg := <-redisChannel:
-			println("manager: redismsg:", redismsg.Channel, string(redismsg.Data))
+			// Todo, probably need to verify the channel is in the connections map
 			for _, v := range connections[redismsg.Channel] {
 				v <- redismsg.Data
 			}
-
 		}
-
-		fmt.Printf("connections: %#v", connections)
 	}
 }
 
