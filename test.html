@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+
+<meta charset="utf-8" />
+
+<title>WebSocket Test</title>
+
+<script language="javascript" type="text/javascript">
+
+  var wsUri = "ws://localhost:2001/sub/";
+  var input, output, button;
+
+  function init()
+  {
+    input = document.getElementById("input");
+    output = document.getElementById("output");
+	button = document.getElementById("input-button");
+	button.onclick = onInputChange;
+
+
+	document.getElementById("connect-button").onclick = testWebSocket;
+
+    //testWebSocket();
+  }
+
+  function onInputChange(event) {
+	  writeToScreen(input.value);
+	  doSend(input.value);
+  }
+
+  function testWebSocket()
+  {
+
+	var uri = wsUri + document.getElementById("device").value + "/" + document.getElementById("session").value;
+    websocket = new WebSocket(uri);
+
+    websocket.onopen = function(evt) { onOpen(evt) };
+    websocket.onclose = function(evt) { onClose(evt) };
+    websocket.onmessage = function(evt) { onMessage(evt) };
+    websocket.onerror = function(evt) { onError(evt) };
+  }
+
+  function onOpen(evt)
+  {
+    writeToScreen("CONNECTED");
+  }
+
+  function onClose(evt)
+  {
+    writeToScreen("DISCONNECTED");
+  }
+
+  function onMessage(evt)
+  {
+    writeToScreen('<span style="color: blue;">RESPONSE: ' + evt.data+'</span>');
+    //websocket.close();
+  }
+
+  function onError(evt)
+  {
+    writeToScreen('<span style="color: red;">ERROR:</span> ' + evt.data);
+  }
+
+  function doSend(message)
+  {
+    writeToScreen("SENT: " + message); 
+    websocket.send(message);
+  }
+
+  function writeToScreen(message)
+  {
+    var pre = document.createElement("p");
+    pre.style.wordWrap = "break-word";
+    pre.innerHTML = message;
+    output.appendChild(pre);
+  }
+
+  window.addEventListener("load", init, false);
+
+</script>
+
+<h2>WebSocket Test</h2>
+
+<input type="textbox" placeholder="Device" id="device"/>
+<input type="textbox" placeholder="Session" id="session"/>
+<button id="connect-button">Connect</button>
+
+<h3>Input</h3>
+<textarea id="input"></textarea>
+<button id="input-button">Send</button>
+
+
+<h3>Output</h3>
+<div id="output"></div>
+
+
+
+
+
+
+
