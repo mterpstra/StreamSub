@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -103,26 +102,7 @@ func redisMonitor() {
 			println("Error during ReceiveMessage: ", err.Error())
 			break
 		}
-
 		println("redis.PMessage: ", v.Channel, v.Payload)
-
-		if v.Channel == "__keyevent@0__:expired" {
-			println("Processing expired message")
-
-			parts := strings.Split(string(v.Payload), ":")
-			println("parts: ", parts)
-
-			cmd := "data:" + parts[1] + ":" + parts[2]
-			println("cmd: ", cmd)
-
-			strCommand := redisClient.Get(cmd)
-
-			redisClient.Publish(parts[1], strCommand.Val())
-
-			redisClient.Del("data:" + parts[1] + ":" + parts[2])
-
-		}
-
 		redisChannel <- v
 	}
 }
