@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
-	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	redis "gopkg.in/redis.v3"
 )
 
 type addConnMessage struct {
@@ -23,7 +26,7 @@ type delConnMessage struct {
 var (
 	addConnChannel = make(chan addConnMessage)
 	delConnChannel = make(chan delConnMessage)
-	redisChannel   = make(chan redis.PMessage)
+	redisChannel   = make(chan *redis.Message)
 )
 
 var upgrader = websocket.Upgrader{
@@ -31,7 +34,22 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-var redisConnection redis.Conn
+var redisClient *redis.Client
+
+func uuid() string {
+	// generate 32 bits timestamp
+	unix32bits := uint32(time.Now().UTC().Unix())
+
+	buff := make([]byte, 12)
+
+	numRead, err := rand.Read(buff)
+
+	if numRead != len(buff) || err != nil {
+		panic(err)
+	}
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x-%x\n", unix32bits, buff[0:2], buff[2:4], buff[4:6], buff[6:8], buff[8:])
+}
 
 func handleSubscription(w http.ResponseWriter, r *http.Request) {
 
@@ -42,11 +60,24 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vars := mux.Vars(r)
-	device := vars["device"]
+	device := uuid()
 	session := vars["session"]
 	ch := make(chan []byte)
 
 	addConnChannel <- addConnMessage{device, session, ch}
+
+	// TODO: This should be a loop where it both reads and writes every once in a while.
+	// That way if we do not receive the disconnect, we will get it on the next ping/write.
+	go func() {
+		println("Starting routine to read from device: ", device)
+		messageType, p, err := conn.ReadMessage()
+		println("read message: ", device, messageType, p, err)
+		if err != nil {
+			println("Device disconnected: ", device)
+			delConnChannel <- delConnMessage{device, session}
+			return
+		}
+	}()
 
 	for {
 		select {
@@ -56,32 +87,53 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// TODO: Decide how to know when the connection is closed....
-	// Do I really need a new goroutine for this to read on continually?
 }
 
 func redisMonitor() {
-	psc := redis.PubSubConn{redisConnection}
-	psc.PSubscribe("*")
+
+	pubsub, err := redisClient.PSubscribe("*")
+	if err != nil {
+		println("Error during PSubscribe: ", err.Error())
+		return
+	}
+
 	for {
-		switch v := psc.Receive().(type) {
-		case redis.PMessage:
-			println("redis.PMessage:", v.Channel, string(v.Data))
-			redisChannel <- v
-		case error:
-			fmt.Printf("redis.Error: %v:", v)
-		default:
-			fmt.Printf("redis type %v: ", v)
+		v, err := pubsub.ReceiveMessage()
+		if err != nil {
+			println("Error during ReceiveMessage: ", err.Error())
+			break
 		}
+
+		println("redis.PMessage: ", v.Channel, v.Payload)
+
+		if v.Channel == "__keyevent@0__:expired" {
+			println("Processing expired message")
+
+			parts := strings.Split(string(v.Payload), ":")
+			println("parts: ", parts)
+
+			cmd := "data:" + parts[1] + ":" + parts[2]
+			println("cmd: ", cmd)
+
+			strCommand := redisClient.Get(cmd)
+
+			redisClient.Publish(parts[1], strCommand.Val())
+
+			redisClient.Del("data:" + parts[1] + ":" + parts[2])
+
+		}
+
+		redisChannel <- v
 	}
 }
 
+// ConnectionsListType is just a container for all the connections
 type ConnectionsListType map[string]map[string]chan []byte
 
 func printConnections(conns ConnectionsListType) {
 	println("------------------------------------------------------------------------")
 	for session, deviceList := range conns {
-		for device, _ := range deviceList {
+		for device := range deviceList {
 			println(session, device)
 		}
 	}
@@ -116,7 +168,7 @@ func manager() {
 		case redismsg := <-redisChannel:
 			// Todo, probably need to verify the channel is in the connections map
 			for _, v := range connections[redismsg.Channel] {
-				v <- redismsg.Data
+				v <- []byte(redismsg.Payload)
 			}
 		}
 	}
@@ -125,17 +177,15 @@ func manager() {
 func main() {
 
 	var err error
-	redisConnection, err = redis.Dial("tcp", "localhost:6379")
-	if err != nil {
-		println(err.Error())
-	}
-	defer redisConnection.Close()
+	options := &redis.Options{Network: "tcp", Addr: "localhost:6379"}
+	redisClient = redis.NewClient(options)
+	defer redisClient.Close()
 
 	go redisMonitor()
 	go manager()
 
 	r := mux.NewRouter()
-	r.HandleFunc("/sub/{device}/{session}", handleSubscription)
+	r.HandleFunc("/sub/{session}", handleSubscription)
 	r.Handle("/{rest}", http.FileServer(http.Dir(".")))
 	http.Handle("/", r)
 	err = http.ListenAndServe(":2001", nil)
